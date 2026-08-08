@@ -1,0 +1,35 @@
+
+# Python environments
+.venv/
+venv/
+env/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Python packaging artifacts
+*.egg-info/
+dist/
+build/
+
+# Test / coverage artifacts
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Type checking
+.mypy_cache/
+
+# Ruff
+.ruff_cache/
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# macOS
+.DS_Store
