@@ -29,6 +29,10 @@ class MistralLLMProvider:
         self._client = Mistral(api_key=api_key)
         self._model = model
 
+    @property
+    def name(self) -> str:
+        return "mistral"
+
     async def generate(
         self,
         request: LLMRequest,
