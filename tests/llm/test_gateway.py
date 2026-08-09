@@ -5,6 +5,7 @@ import pytest
 from nexus.core.config import Settings
 from nexus.llm.errors import (
     LLMProviderAuthenticationError,
+    LLMProviderError,
     LLMProviderRateLimitError,
     LLMProviderTimeoutError,
     LLMProviderUnavailableError,
@@ -14,10 +15,18 @@ from nexus.llm.models import LLMRequest, LLMResponse
 from nexus.llm.providers.fake import FakeLLMProvider
 
 
+def test_gateway_requires_provider() -> None:
+    with pytest.raises(
+        ValueError,
+        match="at least one LLM provider",
+    ):
+        LLMGateway([], Settings())
+
+
 @pytest.mark.asyncio
 async def test_gateway_generates_response() -> None:
     provider = FakeLLMProvider()
-    gateway = LLMGateway(provider, Settings())
+    gateway = LLMGateway([provider], Settings())
 
     response = await gateway.generate(
         LLMRequest(prompt="Hello Nexus"),
@@ -30,7 +39,7 @@ async def test_gateway_generates_response() -> None:
 @pytest.mark.asyncio
 async def test_gateway_delegates_to_provider() -> None:
     provider = FakeLLMProvider()
-    gateway = LLMGateway(provider, Settings())
+    gateway = LLMGateway([provider], Settings())
 
     await gateway.generate(LLMRequest(prompt="first"))
     await gateway.generate(LLMRequest(prompt="second"))
@@ -59,7 +68,7 @@ async def test_gateway_times_out_slow_provider() -> None:
     )
 
     gateway = LLMGateway(
-        SlowLLMProvider(),
+        [SlowLLMProvider()],
         settings,
     )
 
@@ -104,7 +113,7 @@ async def test_gateway_retries_transient_failure() -> None:
         llm_retry_max_delay_seconds=0.002,
     )
 
-    gateway = LLMGateway(provider, settings)
+    gateway = LLMGateway([provider], settings)
 
     response = await gateway.generate(
         LLMRequest(prompt="retry me"),
@@ -124,7 +133,7 @@ async def test_gateway_stops_after_max_retries() -> None:
         llm_retry_max_delay_seconds=0.002,
     )
 
-    gateway = LLMGateway(provider, settings)
+    gateway = LLMGateway([provider], settings)
 
     with pytest.raises(
         LLMProviderUnavailableError,
@@ -161,7 +170,7 @@ async def test_gateway_does_not_retry_authentication_failure() -> None:
         llm_retry_max_delay_seconds=0.002,
     )
 
-    gateway = LLMGateway(provider, settings)
+    gateway = LLMGateway([provider], settings)
 
     with pytest.raises(
         LLMProviderAuthenticationError,
@@ -204,7 +213,7 @@ async def test_gateway_retries_rate_limit_error() -> None:
         llm_retry_max_delay_seconds=0.002,
     )
 
-    gateway = LLMGateway(provider, settings)
+    gateway = LLMGateway([provider], settings)
 
     response = await gateway.generate(
         LLMRequest(prompt="retry rate limit"),
@@ -212,3 +221,140 @@ async def test_gateway_retries_rate_limit_error() -> None:
 
     assert response.content == "success after retry"
     assert provider.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_gateway_falls_back_to_second_provider() -> None:
+    class FailingProvider:
+        async def generate(
+            self,
+            request: LLMRequest,
+        ) -> LLMResponse:
+            raise LLMProviderUnavailableError(
+                "primary unavailable",
+            )
+
+    primary = FailingProvider()
+    secondary = FakeLLMProvider()
+
+    settings = Settings(
+        llm_max_retries=0,
+        llm_retry_base_delay_seconds=0.001,
+        llm_retry_max_delay_seconds=0.002,
+    )
+
+    gateway = LLMGateway(
+        [primary, secondary],
+        settings,
+    )
+
+    response = await gateway.generate(
+        LLMRequest(prompt="fallback test"),
+    )
+
+    assert response.content == "Generated response for: fallback test"
+    assert secondary.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_gateway_fails_when_all_providers_fail() -> None:
+    class FailingProvider:
+        async def generate(
+            self,
+            request: LLMRequest,
+        ) -> LLMResponse:
+            raise LLMProviderUnavailableError(
+                "provider unavailable",
+            )
+
+    gateway = LLMGateway(
+        [
+            FailingProvider(),
+            FailingProvider(),
+        ],
+        Settings(
+            llm_max_retries=0,
+            llm_retry_base_delay_seconds=0.001,
+            llm_retry_max_delay_seconds=0.002,
+        ),
+    )
+
+    with pytest.raises(
+        LLMProviderUnavailableError,
+        match="provider unavailable",
+    ):
+        await gateway.generate(
+            LLMRequest(prompt="all providers fail"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_gateway_does_not_fallback_on_authentication_error() -> None:
+    class AuthFailingProvider:
+        async def generate(
+            self,
+            request: LLMRequest,
+        ) -> LLMResponse:
+            raise LLMProviderAuthenticationError(
+                "invalid credentials",
+            )
+
+    secondary = FakeLLMProvider()
+
+    gateway = LLMGateway(
+        [
+            AuthFailingProvider(),
+            secondary,
+        ],
+        Settings(
+            llm_max_retries=0,
+            llm_retry_base_delay_seconds=0.001,
+            llm_retry_max_delay_seconds=0.002,
+        ),
+    )
+
+    with pytest.raises(
+        LLMProviderAuthenticationError,
+        match="invalid credentials",
+    ):
+        await gateway.generate(
+            LLMRequest(prompt="authentication failure"),
+        )
+
+    assert secondary.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_gateway_does_not_fallback_on_generic_provider_error() -> None:
+    class GenericFailingProvider:
+        async def generate(
+            self,
+            request: LLMRequest,
+        ) -> LLMResponse:
+            raise LLMProviderError(
+                "invalid provider request",
+            )
+
+    secondary = FakeLLMProvider()
+
+    gateway = LLMGateway(
+        [
+            GenericFailingProvider(),
+            secondary,
+        ],
+        Settings(
+            llm_max_retries=0,
+            llm_retry_base_delay_seconds=0.001,
+            llm_retry_max_delay_seconds=0.002,
+        ),
+    )
+
+    with pytest.raises(
+        LLMProviderError,
+        match="invalid provider request",
+    ):
+        await gateway.generate(
+            LLMRequest(prompt="generic failure"),
+        )
+
+    assert secondary.calls == 0

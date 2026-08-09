@@ -19,18 +19,22 @@ class LLMGateway:
     Provider-agnostic LLM gateway.
 
     Responsibilities:
-    - Enforce request timeouts.
+    - Provider selection.
+    - Request timeout enforcement.
     - Retry transient provider failures.
-    - Apply exponential backoff.
-    - Never retry permanent failures.
+    - Exponential backoff.
+    - Fallback to another provider after transient failure.
     """
 
     def __init__(
         self,
-        provider: LLMProvider,
+        providers: list[LLMProvider],
         settings: Settings,
     ) -> None:
-        self._provider = provider
+        if not providers:
+            raise ValueError("at least one LLM provider is required")
+
+        self._providers = providers
         self._timeout_seconds = settings.llm_request_timeout_seconds
         self._max_retries = settings.llm_max_retries
         self._retry_base_delay = settings.llm_retry_base_delay_seconds
@@ -65,12 +69,47 @@ class LLMGateway:
         self,
         request: LLMRequest,
     ) -> LLMResponse:
+        last_error: LLMProviderError | None = None
+
+        for provider in self._providers:
+            try:
+                return await self._generate_with_retry(
+                    provider,
+                    request,
+                )
+
+            except (
+                LLMProviderRateLimitError,
+                LLMProviderUnavailableError,
+                LLMProviderTimeoutError,
+            ) as exc:
+                last_error = exc
+                continue
+
+            except LLMProviderAuthenticationError:
+                raise
+
+            except LLMProviderError:
+                raise
+
+        if last_error is not None:
+            raise last_error
+
+        raise LLMProviderError(
+            "all LLM providers failed",
+        )
+
+    async def _generate_with_retry(
+        self,
+        provider: LLMProvider,
+        request: LLMRequest,
+    ) -> LLMResponse:
         attempt = 0
 
         while True:
             try:
                 return await asyncio.wait_for(
-                    self._provider.generate(request),
+                    provider.generate(request),
                     timeout=self._timeout_seconds,
                 )
 
@@ -79,7 +118,7 @@ class LLMGateway:
                     "LLM provider request timed out",
                 )
 
-                if not self._should_retry(error, attempt):
+                if attempt >= self._max_retries:
                     raise error from exc
 
                 await self._backoff(attempt)
@@ -88,35 +127,18 @@ class LLMGateway:
             except (
                 LLMProviderRateLimitError,
                 LLMProviderUnavailableError,
-            ) as exc:
-                if not self._should_retry(exc, attempt):
+            ):
+                if attempt >= self._max_retries:
                     raise
 
                 await self._backoff(attempt)
                 attempt += 1
 
-            except (
-                LLMProviderAuthenticationError,
-                LLMProviderError,
-            ):
+            except LLMProviderAuthenticationError:
                 raise
 
-    def _should_retry(
-        self,
-        error: LLMProviderError,
-        attempt: int,
-    ) -> bool:
-        return (
-            isinstance(
-                error,
-                (
-                    LLMProviderTimeoutError,
-                    LLMProviderRateLimitError,
-                    LLMProviderUnavailableError,
-                ),
-            )
-            and attempt < self._max_retries
-        )
+            except LLMProviderError:
+                raise
 
     async def _backoff(self, attempt: int) -> None:
         delay = min(
