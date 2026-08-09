@@ -3,6 +3,8 @@ from __future__ import annotations
 from nexus.core.config import Settings
 from nexus.llm.errors import LLMProviderError
 from nexus.llm.protocol import LLMProvider
+from nexus.llm.providers.gemini import GeminiLLMProvider
+from nexus.llm.providers.groq import GroqLLMProvider
 from nexus.llm.providers.mistral import MistralLLMProvider
 
 
@@ -10,8 +12,17 @@ def build_llm_providers(settings: Settings) -> list[LLMProvider]:
     """
     Build the configured LLM provider chain.
 
-    Providers are ordered by preference. The LLM gateway uses this
-    order for retry and fallback behavior.
+    Provider order determines fallback order.
+
+    Example:
+
+        LLM_PROVIDER=mistral,groq,gemini
+
+    creates:
+
+        Mistral -> Groq -> Gemini
+
+    The LLM gateway handles retries, timeouts, and fallback.
     """
 
     provider_names = [
@@ -19,7 +30,9 @@ def build_llm_providers(settings: Settings) -> list[LLMProvider]:
     ]
 
     if not provider_names:
-        raise ValueError("at least one LLM provider must be configured")
+        raise ValueError(
+            "at least one LLM provider must be configured",
+        )
 
     providers: list[LLMProvider] = []
 
@@ -34,6 +47,32 @@ def build_llm_providers(settings: Settings) -> list[LLMProvider]:
                 MistralLLMProvider(
                     api_key=settings.mistral_api_key,
                     model=settings.mistral_model,
+                ),
+            )
+
+        elif provider_name == "groq":
+            if not settings.groq_api_key:
+                raise LLMProviderError(
+                    "Groq provider selected but GROQ_API_KEY is not configured",
+                )
+
+            providers.append(
+                GroqLLMProvider(
+                    api_key=settings.groq_api_key,
+                    model=settings.groq_model,
+                ),
+            )
+
+        elif provider_name == "gemini":
+            if not settings.gemini_api_key:
+                raise LLMProviderError(
+                    "Gemini provider selected but GEMINI_API_KEY is not configured",
+                )
+
+            providers.append(
+                GeminiLLMProvider(
+                    api_key=settings.gemini_api_key,
+                    model=settings.gemini_model,
                 ),
             )
 

@@ -65,6 +65,12 @@ class Settings(BaseSettings):
     llm_provider: str = "mistral"
     mistral_api_key: str | None = None
     mistral_model: str = "mistral-small-latest"
+
+    groq_api_key: str | None = None
+    groq_model: str = "llama-3.3-70b-versatile"
+
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-2.5-flash"
     llm_request_timeout_seconds: float = 30.0
     llm_max_retries: int = 2
     llm_retry_base_delay_seconds: float = 0.5
