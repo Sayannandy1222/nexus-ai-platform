@@ -62,7 +62,11 @@ class Settings(BaseSettings):
     rate_limit_per_hour: int = 1000
 
     # LLM
-    llm_provider: str = "groq"
+    llm_provider: str = "mistral"
+    llm_request_timeout_seconds: float = 30.0
+    llm_max_retries: int = 2
+    llm_retry_base_delay_seconds: float = 0.5
+    llm_retry_max_delay_seconds: float = 5.0
 
     # Azure OpenAI - optional future provider
     azure_openai_endpoint: str | None = None
