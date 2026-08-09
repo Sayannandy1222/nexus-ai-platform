@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import suppress
 
 from fastapi import APIRouter, Request
+from opentelemetry import trace
 from pydantic import BaseModel, Field
 
 from nexus.cache.services.semantic_cache import SemanticCache
@@ -12,6 +13,8 @@ router = APIRouter(
     prefix="/generate",
     tags=["LLM"],
 )
+
+tracer = trace.get_tracer(__name__)
 
 
 class GenerateRequest(BaseModel):
@@ -38,30 +41,50 @@ async def generate(
     gateway = request.app.state.llm_gateway
     semantic_cache: SemanticCache = request.app.state.semantic_cache
 
-    # Cache failures must not take down the LLM API.
-    try:
-        cached = await semantic_cache.get(payload.prompt)
-    except Exception:
-        cached = None
+    with tracer.start_as_current_span("semantic_cache.get") as span:
+        span.set_attribute("cache.key_type", "semantic")
+
+        try:
+            cached = await semantic_cache.get(payload.prompt)
+        except Exception as exc:
+            span.record_exception(exc)
+            span.set_attribute("cache.hit", False)
+            span.set_attribute("cache.error", True)
+            cached = None
+
+        if cached is not None:
+            span.set_attribute("cache.hit", True)
 
     if cached is not None:
+        with tracer.start_as_current_span("generate.cache_hit") as span:
+            span.set_attribute("cache.source", "semantic_cache")
+            span.set_attribute("llm.called", False)
+
         return GenerateResponse(
             content=cached.response,
             model="cache",
             source="semantic_cache",
         )
 
-    response: LLMResponse = await gateway.generate(
-        LLMRequest(
-            prompt=payload.prompt,
-        ),
-    )
+    with tracer.start_as_current_span("llm.gateway.generate") as span:
+        span.set_attribute("llm.request_type", "generation")
 
-    with suppress(Exception):
-        await semantic_cache.set(
-            payload.prompt,
-            response.content,
+        response: LLMResponse = await gateway.generate(
+            LLMRequest(
+                prompt=payload.prompt,
+            ),
         )
+
+        span.set_attribute("llm.model", response.model)
+
+    with tracer.start_as_current_span("semantic_cache.set") as span:
+        span.set_attribute("cache.key_type", "semantic")
+
+        with suppress(Exception):
+            await semantic_cache.set(
+                payload.prompt,
+                response.content,
+            )
 
     return GenerateResponse(
         content=response.content,

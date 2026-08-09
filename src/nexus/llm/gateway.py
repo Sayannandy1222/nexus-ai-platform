@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from time import perf_counter
 
+from opentelemetry import trace
+
 from nexus.core.config import Settings
 from nexus.llm.errors import (
     LLMProviderAuthenticationError,
@@ -21,6 +23,8 @@ from nexus.observability.llm_metrics import (
     LLM_RETRIES_TOTAL,
 )
 
+tracer = trace.get_tracer(__name__)
+
 
 class LLMGateway:
     """
@@ -33,6 +37,7 @@ class LLMGateway:
     - Exponential backoff.
     - Fallback to another provider.
     - Provider-level Prometheus metrics.
+    - OpenTelemetry tracing.
     """
 
     def __init__(
@@ -78,44 +83,102 @@ class LLMGateway:
         self,
         request: LLMRequest,
     ) -> LLMResponse:
-        last_error: LLMProviderError | None = None
+        with tracer.start_as_current_span("llm.gateway.generate") as span:
+            span.set_attribute(
+                "llm.provider.count",
+                len(self._providers),
+            )
+            span.set_attribute(
+                "llm.request.prompt_length",
+                len(request.prompt),
+            )
 
-        for index, provider in enumerate(self._providers):
-            try:
-                return await self._generate_with_retry(
-                    provider,
-                    request,
+            last_error: LLMProviderError | None = None
+
+            for index, provider in enumerate(self._providers):
+                provider_name = self._provider_name(provider)
+
+                span.set_attribute(
+                    "llm.provider.attempt",
+                    index + 1,
                 )
 
-            except (
-                LLMProviderRateLimitError,
-                LLMProviderUnavailableError,
-                LLMProviderTimeoutError,
-            ) as exc:
-                last_error = exc
+                try:
+                    response = await self._generate_with_retry(
+                        provider,
+                        request,
+                    )
 
-                if index + 1 < len(self._providers):
-                    LLM_FALLBACKS_TOTAL.labels(
-                        from_provider=self._provider_name(provider),
-                        to_provider=self._provider_name(
+                    span.set_attribute(
+                        "llm.provider.selected",
+                        provider_name,
+                    )
+
+                    return response
+
+                except (
+                    LLMProviderRateLimitError,
+                    LLMProviderUnavailableError,
+                    LLMProviderTimeoutError,
+                ) as exc:
+                    last_error = exc
+
+                    span.record_exception(exc)
+
+                    span.add_event(
+                        "llm.provider.failure",
+                        {
+                            "llm.provider": provider_name,
+                            "llm.error_type": self._error_type(exc),
+                            "llm.provider_index": index,
+                        },
+                    )
+
+                    if index + 1 < len(self._providers):
+                        next_provider = self._provider_name(
                             self._providers[index + 1],
-                        ),
-                    ).inc()
+                        )
 
-                continue
+                        LLM_FALLBACKS_TOTAL.labels(
+                            from_provider=provider_name,
+                            to_provider=next_provider,
+                        ).inc()
 
-            except LLMProviderAuthenticationError:
-                raise
+                        span.add_event(
+                            "llm.provider.fallback",
+                            {
+                                "llm.from_provider": provider_name,
+                                "llm.to_provider": next_provider,
+                            },
+                        )
 
-            except LLMProviderError:
-                raise
+                    continue
 
-        if last_error is not None:
-            raise last_error
+                except LLMProviderAuthenticationError as exc:
+                    span.record_exception(exc)
+                    span.set_attribute(
+                        "llm.error_type",
+                        "authentication",
+                    )
+                    raise
 
-        raise LLMProviderError(
-            "all LLM providers failed",
-        )
+                except LLMProviderError as exc:
+                    span.record_exception(exc)
+                    span.set_attribute(
+                        "llm.error_type",
+                        self._error_type(exc),
+                    )
+                    raise
+
+            if last_error is not None:
+                span.record_exception(last_error)
+                raise last_error
+
+            error = LLMProviderError(
+                "all LLM providers failed",
+            )
+            span.record_exception(error)
+            raise error
 
     async def _generate_with_retry(
         self,
@@ -125,129 +188,206 @@ class LLMGateway:
         provider_name = self._provider_name(provider)
         attempt = 0
 
-        while True:
-            started_at = perf_counter()
+        with tracer.start_as_current_span(
+            f"llm.provider.{provider_name}",
+        ) as provider_span:
+            provider_span.set_attribute(
+                "llm.provider",
+                provider_name,
+            )
+            provider_span.set_attribute(
+                "llm.request.prompt_length",
+                len(request.prompt),
+            )
 
-            try:
-                response = await asyncio.wait_for(
-                    provider.generate(request),
-                    timeout=self._timeout_seconds,
-                )
+            while True:
+                started_at = perf_counter()
 
-            except TimeoutError as exc:
-                duration = perf_counter() - started_at
+                with tracer.start_as_current_span(
+                    "llm.provider.attempt",
+                ) as attempt_span:
+                    attempt_span.set_attribute(
+                        "llm.provider",
+                        provider_name,
+                    )
+                    attempt_span.set_attribute(
+                        "llm.attempt",
+                        attempt + 1,
+                    )
 
-                LLM_REQUEST_DURATION_SECONDS.labels(
-                    provider=provider_name,
-                ).observe(duration)
+                    try:
+                        response = await asyncio.wait_for(
+                            provider.generate(request),
+                            timeout=self._timeout_seconds,
+                        )
 
-                LLM_REQUESTS_TOTAL.labels(
-                    provider=provider_name,
-                    status="error",
-                ).inc()
+                    except TimeoutError as exc:
+                        duration = perf_counter() - started_at
 
-                LLM_ERRORS_TOTAL.labels(
-                    provider=provider_name,
-                    error_type="timeout",
-                ).inc()
+                        LLM_REQUEST_DURATION_SECONDS.labels(
+                            provider=provider_name,
+                        ).observe(duration)
 
-                if attempt >= self._max_retries:
-                    raise LLMProviderTimeoutError(
-                        "LLM provider request timed out",
-                    ) from exc
+                        LLM_REQUESTS_TOTAL.labels(
+                            provider=provider_name,
+                            status="error",
+                        ).inc()
 
-                LLM_RETRIES_TOTAL.labels(
-                    provider=provider_name,
-                    error_type="timeout",
-                ).inc()
+                        LLM_ERRORS_TOTAL.labels(
+                            provider=provider_name,
+                            error_type="timeout",
+                        ).inc()
 
-                await self._backoff(attempt)
-                attempt += 1
+                        attempt_span.record_exception(exc)
+                        attempt_span.set_attribute(
+                            "llm.error_type",
+                            "timeout",
+                        )
 
-            except (
-                LLMProviderRateLimitError,
-                LLMProviderUnavailableError,
-            ) as exc:
-                duration = perf_counter() - started_at
+                        if attempt >= self._max_retries:
+                            raise LLMProviderTimeoutError(
+                                "LLM provider request timed out",
+                            ) from exc
 
-                LLM_REQUEST_DURATION_SECONDS.labels(
-                    provider=provider_name,
-                ).observe(duration)
+                        LLM_RETRIES_TOTAL.labels(
+                            provider=provider_name,
+                            error_type="timeout",
+                        ).inc()
 
-                LLM_REQUESTS_TOTAL.labels(
-                    provider=provider_name,
-                    status="error",
-                ).inc()
+                        attempt_span.add_event(
+                            "llm.retry",
+                            {
+                                "llm.provider": provider_name,
+                                "llm.attempt": attempt + 1,
+                            },
+                        )
 
-                error_type = self._error_type(exc)
+                        await self._backoff(attempt)
+                        attempt += 1
 
-                LLM_ERRORS_TOTAL.labels(
-                    provider=provider_name,
-                    error_type=error_type,
-                ).inc()
+                    except (
+                        LLMProviderRateLimitError,
+                        LLMProviderUnavailableError,
+                    ) as exc:
+                        duration = perf_counter() - started_at
 
-                if attempt >= self._max_retries:
-                    raise
+                        LLM_REQUEST_DURATION_SECONDS.labels(
+                            provider=provider_name,
+                        ).observe(duration)
 
-                LLM_RETRIES_TOTAL.labels(
-                    provider=provider_name,
-                    error_type=error_type,
-                ).inc()
+                        LLM_REQUESTS_TOTAL.labels(
+                            provider=provider_name,
+                            status="error",
+                        ).inc()
 
-                await self._backoff(attempt)
-                attempt += 1
+                        error_type = self._error_type(exc)
 
-            except LLMProviderAuthenticationError as exc:
-                duration = perf_counter() - started_at
+                        LLM_ERRORS_TOTAL.labels(
+                            provider=provider_name,
+                            error_type=error_type,
+                        ).inc()
 
-                LLM_REQUEST_DURATION_SECONDS.labels(
-                    provider=provider_name,
-                ).observe(duration)
+                        attempt_span.record_exception(exc)
+                        attempt_span.set_attribute(
+                            "llm.error_type",
+                            error_type,
+                        )
 
-                LLM_REQUESTS_TOTAL.labels(
-                    provider=provider_name,
-                    status="error",
-                ).inc()
+                        if attempt >= self._max_retries:
+                            raise
 
-                LLM_ERRORS_TOTAL.labels(
-                    provider=provider_name,
-                    error_type="authentication",
-                ).inc()
+                        LLM_RETRIES_TOTAL.labels(
+                            provider=provider_name,
+                            error_type=error_type,
+                        ).inc()
 
-                raise exc
+                        attempt_span.add_event(
+                            "llm.retry",
+                            {
+                                "llm.provider": provider_name,
+                                "llm.attempt": attempt + 1,
+                                "llm.error_type": error_type,
+                            },
+                        )
 
-            except LLMProviderError as exc:
-                duration = perf_counter() - started_at
+                        await self._backoff(attempt)
+                        attempt += 1
 
-                LLM_REQUEST_DURATION_SECONDS.labels(
-                    provider=provider_name,
-                ).observe(duration)
+                    except LLMProviderAuthenticationError as exc:
+                        duration = perf_counter() - started_at
 
-                LLM_REQUESTS_TOTAL.labels(
-                    provider=provider_name,
-                    status="error",
-                ).inc()
+                        LLM_REQUEST_DURATION_SECONDS.labels(
+                            provider=provider_name,
+                        ).observe(duration)
 
-                LLM_ERRORS_TOTAL.labels(
-                    provider=provider_name,
-                    error_type="provider_error",
-                ).inc()
+                        LLM_REQUESTS_TOTAL.labels(
+                            provider=provider_name,
+                            status="error",
+                        ).inc()
 
-                raise exc
+                        LLM_ERRORS_TOTAL.labels(
+                            provider=provider_name,
+                            error_type="authentication",
+                        ).inc()
 
-            else:
-                duration = perf_counter() - started_at
+                        attempt_span.record_exception(exc)
+                        attempt_span.set_attribute(
+                            "llm.error_type",
+                            "authentication",
+                        )
 
-                LLM_REQUEST_DURATION_SECONDS.labels(
-                    provider=provider_name,
-                ).observe(duration)
+                        raise
 
-                LLM_REQUESTS_TOTAL.labels(
-                    provider=provider_name,
-                    status="success",
-                ).inc()
+                    except LLMProviderError as exc:
+                        duration = perf_counter() - started_at
 
-                return response
+                        LLM_REQUEST_DURATION_SECONDS.labels(
+                            provider=provider_name,
+                        ).observe(duration)
+
+                        LLM_REQUESTS_TOTAL.labels(
+                            provider=provider_name,
+                            status="error",
+                        ).inc()
+
+                        error_type = self._error_type(exc)
+
+                        LLM_ERRORS_TOTAL.labels(
+                            provider=provider_name,
+                            error_type=error_type,
+                        ).inc()
+
+                        attempt_span.record_exception(exc)
+                        attempt_span.set_attribute(
+                            "llm.error_type",
+                            error_type,
+                        )
+
+                        raise
+
+                    else:
+                        duration = perf_counter() - started_at
+
+                        LLM_REQUEST_DURATION_SECONDS.labels(
+                            provider=provider_name,
+                        ).observe(duration)
+
+                        LLM_REQUESTS_TOTAL.labels(
+                            provider=provider_name,
+                            status="success",
+                        ).inc()
+
+                        attempt_span.set_attribute(
+                            "llm.response.model",
+                            response.model,
+                        )
+
+                        provider_span.set_attribute(
+                            "llm.response.model",
+                            response.model,
+                        )
+
+                        return response
 
     @staticmethod
     def _provider_name(provider: LLMProvider) -> str:
