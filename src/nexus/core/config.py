@@ -12,19 +12,26 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # Application
     app_name: str = "nexus-ai-platform"
-    environment: str = Field(default="development", alias="NEXUS_ENV")
+    environment: str = Field(
+        default="development",
+        alias="NEXUS_ENV",
+    )
     log_level: str = "INFO"
 
+    # API
     api_host: str = "0.0.0.0"
     api_port: int = 8000
 
+    # Database
     database_url: str = "postgresql+asyncpg://nexus:nexus@localhost:5432/nexus"
 
+    # Redis / Valkey
     redis_url: str = "redis://localhost:6379/0"
     redis_key_prefix: str = "nexus:v1"
 
-    # Redis/Valkey connection policy
+    # Redis connection policy
     redis_max_connections: int = 50
     redis_connect_timeout_seconds: float = 2.0
     redis_socket_timeout_seconds: float = 1.0
@@ -35,13 +42,18 @@ class Settings(BaseSettings):
     chunk_overlap: int = 150
     retrieval_top_k: int = 5
 
-    # Redis cache policy
+    # Semantic cache policy
     semantic_cache_ttl_seconds: int = 3600
     semantic_cache_max_bytes: int = 262_144
-    document_cache_ttl_seconds: int = 86400
-    session_ttl_seconds: int = 86400
+
+    # Document cache policy
+    document_cache_ttl_seconds: int = 86_400
+
+    # Agent memory policy
+    session_ttl_seconds: int = 86_400
     session_max_messages: int = 100
     session_max_bytes: int = 1_000_000
+    session_max_message_bytes: int = 10_000
 
     # Rate limiting
     rate_limit_per_minute: int = 60
@@ -50,6 +62,7 @@ class Settings(BaseSettings):
     # LLM
     llm_provider: str = "groq"
 
+    # Azure OpenAI - optional future provider
     azure_openai_endpoint: str | None = None
     azure_openai_api_key: str | None = None
     azure_openai_api_version: str | None = None
@@ -61,7 +74,7 @@ class Settings(BaseSettings):
     otel_service_name: str = "nexus-api"
     otel_exporter_otlp_endpoint: str | None = None
 
-    # Optional BetterDB integration
+    # BetterDB integration
     betterdb_enabled: bool = False
     betterdb_endpoint: str | None = None
     betterdb_token: str | None = None
