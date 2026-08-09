@@ -20,19 +20,27 @@ class Settings(BaseSettings):
     api_port: int = 8000
 
     database_url: str = "postgresql+asyncpg://nexus:nexus@localhost:5432/nexus"
+
     redis_url: str = "redis://localhost:6379/0"
     redis_key_prefix: str = "nexus:v1"
 
+    # RAG
     chunk_size: int = 1000
     chunk_overlap: int = 150
     retrieval_top_k: int = 5
 
-    cache_ttl_seconds: int = 604800
+    # Redis cache policy
+    semantic_cache_ttl_seconds: int = 3600
+    document_cache_ttl_seconds: int = 86400
     session_ttl_seconds: int = 86400
+    session_max_messages: int = 100
+    session_max_bytes: int = 1_000_000
 
+    # Rate limiting
     rate_limit_per_minute: int = 60
     rate_limit_per_hour: int = 1000
 
+    # LLM
     llm_provider: str = "azure_openai"
 
     azure_openai_endpoint: str | None = None
@@ -41,10 +49,12 @@ class Settings(BaseSettings):
     azure_openai_chat_deployment: str | None = None
     azure_openai_embedding_deployment: str | None = None
 
+    # Observability
     otel_enabled: bool = True
     otel_service_name: str = "nexus-api"
     otel_exporter_otlp_endpoint: str | None = None
 
+    # Optional BetterDB integration
     betterdb_enabled: bool = False
     betterdb_endpoint: str | None = None
     betterdb_token: str | None = None
