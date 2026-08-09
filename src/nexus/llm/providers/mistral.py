@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from mistralai import Mistral  # type: ignore[import-untyped]
+import httpx
 
 from nexus.llm.errors import (
     LLMProviderAuthenticationError,
@@ -16,18 +16,25 @@ from nexus.llm.models import LLMRequest, LLMResponse
 
 
 class MistralLLMProvider:
-    """Mistral implementation of the Nexus LLM provider contract."""
+    """HTTP-based Mistral implementation of the Nexus LLM contract."""
+
+    BASE_URL = "https://api.mistral.ai/v1/chat/completions"
 
     def __init__(
         self,
         api_key: str,
         model: str = "mistral-small-latest",
+        timeout_seconds: float = 30.0,
     ) -> None:
         if not api_key.strip():
             raise ValueError("Mistral API key must not be empty")
 
-        self._client = Mistral(api_key=api_key)
+        if timeout_seconds <= 0:
+            raise ValueError("Mistral timeout must be positive")
+
+        self._api_key = api_key
         self._model = model
+        self._timeout_seconds = timeout_seconds
 
     @property
     def name(self) -> str:
@@ -37,52 +44,67 @@ class MistralLLMProvider:
         self,
         request: LLMRequest,
     ) -> LLMResponse:
-        """
-        Generate a response using Mistral.
+        payload = {
+            "model": self._model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": request.prompt,
+                },
+            ],
+        }
 
-        Provider-specific failures are translated into Nexus domain
-        exceptions so the rest of the application remains provider-agnostic.
-        """
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+
+        timeout = httpx.Timeout(self._timeout_seconds)
 
         try:
-            response = await self._client.chat.complete_async(
-                model=self._model,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": request.prompt,
-                    },
-                ],
-            )
+            async with httpx.AsyncClient(
+                timeout=timeout,
+            ) as client:
+                response = await client.post(
+                    self.BASE_URL,
+                    headers=headers,
+                    json=payload,
+                )
 
-        except TimeoutError as exc:
+        except httpx.TimeoutException as exc:
             raise LLMProviderTimeoutError(
                 "Mistral request timed out",
             ) from exc
 
-        except Exception as exc:
-            self._raise_provider_error(exc)
+        except httpx.RequestError as exc:
+            raise LLMProviderUnavailableError(
+                f"Mistral network request failed: {exc}",
+            ) from exc
 
-        if response is None:
-            raise LLMProviderResponseError(
-                "Mistral returned an empty response",
-            )
+        self._raise_for_status(response)
 
         try:
-            choices = response.choices
+            data: Any = response.json()
+        except ValueError as exc:
+            raise LLMProviderResponseError(
+                "Mistral returned invalid JSON",
+            ) from exc
 
-            if not choices:
+        try:
+            choices = data["choices"]
+
+            if not isinstance(choices, list) or not choices:
                 raise LLMProviderResponseError(
                     "Mistral returned no choices",
                 )
 
-            message = choices[0].message
-            content = message.content
+            message = choices[0]["message"]
+            content = message["content"]
 
         except LLMProviderResponseError:
             raise
 
-        except (AttributeError, IndexError, TypeError) as exc:
+        except (KeyError, IndexError, TypeError) as exc:
             raise LLMProviderResponseError(
                 "Mistral returned an unexpected response format",
             ) from exc
@@ -98,31 +120,25 @@ class MistralLLMProvider:
         )
 
     @staticmethod
-    def _raise_provider_error(exc: Exception) -> None:
-        """
-        Translate Mistral/API failures into Nexus domain exceptions.
-
-        The rest of the application should never need to depend on
-        Mistral-specific exception types.
-        """
-
-        status_code: Any = getattr(exc, "status_code", None)
+    def _raise_for_status(response: httpx.Response) -> None:
+        status_code = response.status_code
 
         if status_code in (401, 403):
             raise LLMProviderAuthenticationError(
                 "Mistral authentication failed",
-            ) from exc
+            )
 
         if status_code == 429:
             raise LLMProviderRateLimitError(
                 "Mistral rate limit exceeded",
-            ) from exc
+            )
 
         if status_code in (500, 502, 503, 504):
             raise LLMProviderUnavailableError(
                 "Mistral service is temporarily unavailable",
-            ) from exc
+            )
 
-        raise LLMProviderError(
-            f"Mistral provider request failed: {exc}",
-        ) from exc
+        if status_code >= 400:
+            raise LLMProviderError(
+                f"Mistral provider request failed with HTTP {status_code}",
+            )

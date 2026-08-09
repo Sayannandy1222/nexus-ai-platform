@@ -63,6 +63,8 @@ class Settings(BaseSettings):
 
     # LLM
     llm_provider: str = "mistral"
+    mistral_api_key: str | None = None
+    mistral_model: str = "mistral-small-latest"
     llm_request_timeout_seconds: float = 30.0
     llm_max_retries: int = 2
     llm_retry_base_delay_seconds: float = 0.5
