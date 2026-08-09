@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     redis_key_prefix: str = "nexus:v1"
 
+    # Redis/Valkey connection policy
+    redis_max_connections: int = 50
+    redis_connect_timeout_seconds: float = 2.0
+    redis_socket_timeout_seconds: float = 1.0
+    redis_health_check_interval_seconds: int = 30
+
     # RAG
     chunk_size: int = 1000
     chunk_overlap: int = 150
@@ -41,7 +47,7 @@ class Settings(BaseSettings):
     rate_limit_per_hour: int = 1000
 
     # LLM
-    llm_provider: str = "azure_openai"
+    llm_provider: str = "groq"
 
     azure_openai_endpoint: str | None = None
     azure_openai_api_key: str | None = None
