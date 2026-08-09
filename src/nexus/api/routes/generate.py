@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from contextlib import suppress
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from opentelemetry import trace
 from pydantic import BaseModel, Field
 
 from nexus.cache.services.semantic_cache import SemanticCache
 from nexus.llm.models import LLMRequest, LLMResponse
+from nexus.security.auth import require_api_key
 
 router = APIRouter(
     prefix="/generate",
@@ -33,6 +34,7 @@ class GenerateResponse(BaseModel):
 @router.post(
     "",
     response_model=GenerateResponse,
+    dependencies=[Depends(require_api_key)],
 )
 async def generate(
     payload: GenerateRequest,
@@ -57,8 +59,8 @@ async def generate(
 
     if cached is not None:
         with tracer.start_as_current_span("generate.cache_hit") as span:
-            span.set_attribute("cache.source", "semantic_cache")
-            span.set_attribute("llm.called", False)
+            span.set_attribute("cache.hit", True)
+            span.set_attribute("response.source", "semantic_cache")
 
         return GenerateResponse(
             content=cached.response,
@@ -66,8 +68,8 @@ async def generate(
             source="semantic_cache",
         )
 
-    with tracer.start_as_current_span("llm.gateway.generate") as span:
-        span.set_attribute("llm.request_type", "generation")
+    with tracer.start_as_current_span("llm.generate") as span:
+        span.set_attribute("llm.request.prompt_length", len(payload.prompt))
 
         response: LLMResponse = await gateway.generate(
             LLMRequest(
@@ -76,6 +78,7 @@ async def generate(
         )
 
         span.set_attribute("llm.model", response.model)
+        span.set_attribute("response.source", "llm")
 
     with tracer.start_as_current_span("semantic_cache.set") as span:
         span.set_attribute("cache.key_type", "semantic")
