@@ -37,6 +37,7 @@ class Settings(BaseSettings):
 
     # Redis cache policy
     semantic_cache_ttl_seconds: int = 3600
+    semantic_cache_max_bytes: int = 262_144
     document_cache_ttl_seconds: int = 86400
     session_ttl_seconds: int = 86400
     session_max_messages: int = 100
