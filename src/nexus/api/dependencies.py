@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from fastapi import Header, HTTPException, Request, status
+from fastapi import Depends, HTTPException, Request, status
 
 from nexus.cache.services.rate_limiter import RateLimiter
+from nexus.security.auth import require_api_key
 
 
 def get_rate_limiter(request: Request) -> RateLimiter:
@@ -16,20 +17,18 @@ def get_rate_limiter(request: Request) -> RateLimiter:
 
 async def enforce_rate_limit(
     request: Request,
-    x_user_id: str | None = Header(default=None),
+    caller_id: str = Depends(require_api_key),
 ) -> None:
     """
     Enforce the distributed API rate limit.
 
-    Authentication will eventually provide the canonical user identity.
-    Until then, X-User-ID provides a deterministic development identity.
+    The caller identity is derived from the authenticated API key.
+    The raw API key is never used as a Redis/Valkey key.
     """
-
-    user_id = x_user_id or "anonymous"
 
     limiter = get_rate_limiter(request)
 
-    result = await limiter.check(user_id)
+    result = await limiter.check(caller_id)
 
     if result.allowed:
         return

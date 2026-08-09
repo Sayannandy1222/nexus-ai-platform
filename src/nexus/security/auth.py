@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import secrets
 
 from fastapi import Header, HTTPException, status
@@ -8,16 +9,13 @@ from nexus.core.config import get_settings
 
 
 async def require_api_key(
-    x_api_key: str | None = Header(
-        default=None,
-        alias="X-API-Key",
-    ),
-) -> None:
+    x_api_key: str | None = Header(default=None),
+) -> str:
     """
-    Authenticate requests using the NEXUS API key.
+    Authenticate requests using the configured NEXUS API key.
 
-    The configured API key is never returned or logged.
-    Constant-time comparison prevents timing attacks.
+    Returns a non-secret caller identifier derived from the API key.
+    The raw API key is never returned, logged, or stored in Redis.
     """
 
     settings = get_settings()
@@ -44,3 +42,7 @@ async def require_api_key(
             detail="Invalid API key",
             headers={"WWW-Authenticate": "ApiKey"},
         )
+
+    return hashlib.sha256(
+        x_api_key.encode("utf-8"),
+    ).hexdigest()

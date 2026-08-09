@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from nexus.api.dependencies import enforce_rate_limit
 from nexus.cache.services.semantic_cache import CacheEntry
 from nexus.llm.models import LLMResponse
 from nexus.main import create_app
+from nexus.security.auth import require_api_key
 
 
 class FakeGateway:
@@ -13,6 +15,7 @@ class FakeGateway:
 
     async def generate(self, request):
         self.calls += 1
+
         return LLMResponse(
             content=f"Generated: {request.prompt}",
             model="fake-model",
@@ -47,6 +50,7 @@ class FakeSemanticCache:
             raise RuntimeError("cache unavailable")
 
         self.entries[query] = response
+
         return True
 
 
@@ -58,6 +62,15 @@ def make_client() -> tuple[TestClient, FakeGateway, FakeSemanticCache]:
 
     app.state.llm_gateway = gateway
     app.state.semantic_cache = cache
+
+    async def override_api_key() -> str:
+        return "test-caller"
+
+    async def override_rate_limit() -> None:
+        return None
+
+    app.dependency_overrides[require_api_key] = override_api_key
+    app.dependency_overrides[enforce_rate_limit] = override_rate_limit
 
     return TestClient(app), gateway, cache
 

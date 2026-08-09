@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8000
 
+    # API AUTHENTICATION
+    api_key: str | None = None
+    api_key_header: str = "X-API-Key"
+
     # Database
     database_url: str = "postgresql+asyncpg://nexus:nexus@localhost:5432/nexus"
 
