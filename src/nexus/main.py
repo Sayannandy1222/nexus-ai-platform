@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 from nexus.api.middleware import RequestContextMiddleware
 from nexus.api.router import api_router
@@ -14,6 +15,7 @@ from nexus.core.config import get_settings
 from nexus.core.logging import configure_logging
 from nexus.llm.factory import build_llm_providers
 from nexus.llm.gateway import LLMGateway
+from nexus.observability.tracing import configure_tracing
 
 
 @asynccontextmanager
@@ -57,6 +59,10 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
+    settings = get_settings()
+
+    configure_tracing(settings)
+
     application = FastAPI(
         title="NEXUS AI Platform",
         description=(
@@ -65,6 +71,9 @@ def create_app() -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
     )
+
+    if settings.otel_enabled:
+        FastAPIInstrumentor.instrument_app(application)
 
     application.add_middleware(RequestContextMiddleware)
 
