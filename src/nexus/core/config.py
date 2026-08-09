@@ -14,10 +14,12 @@ class Settings(BaseSettings):
 
     # Application
     app_name: str = "nexus-ai-platform"
+
     environment: str = Field(
         default="development",
         alias="NEXUS_ENV",
     )
+
     log_level: str = "INFO"
 
     # API
