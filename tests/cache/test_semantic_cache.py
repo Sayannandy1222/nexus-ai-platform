@@ -2,6 +2,10 @@ import pytest
 
 from nexus.cache.services.semantic_cache import SemanticCache
 from nexus.core.config import Settings
+from nexus.observability.cache_metrics import (
+    SEMANTIC_CACHE_HITS_TOTAL,
+    SEMANTIC_CACHE_MISSES_TOTAL,
+)
 
 
 class FakeCacheStore:
@@ -11,6 +15,7 @@ class FakeCacheStore:
 
     async def get(self, key: str) -> str | None:
         value = self.values.get(key)
+
         return value[0] if value else None
 
     async def set(
@@ -22,6 +27,7 @@ class FakeCacheStore:
     ) -> bool:
         self.values[key] = (value, ttl_seconds)
         self.last_set_ttl = ttl_seconds
+
         return True
 
     async def delete(self, key: str) -> int:
@@ -39,9 +45,14 @@ async def test_cache_miss_returns_none() -> None:
     store = FakeCacheStore()
     cache = SemanticCache(store, Settings())
 
+    before = SEMANTIC_CACHE_MISSES_TOTAL._value.get()
+
     result = await cache.get("hello")
 
+    after = SEMANTIC_CACHE_MISSES_TOTAL._value.get()
+
     assert result is None
+    assert after == before + 1
 
 
 @pytest.mark.asyncio
@@ -51,10 +62,15 @@ async def test_cache_round_trip() -> None:
 
     await cache.set("hello", "world")
 
+    before = SEMANTIC_CACHE_HITS_TOTAL._value.get()
+
     result = await cache.get("hello")
+
+    after = SEMANTIC_CACHE_HITS_TOTAL._value.get()
 
     assert result is not None
     assert result.response == "world"
+    assert after == before + 1
 
 
 @pytest.mark.asyncio

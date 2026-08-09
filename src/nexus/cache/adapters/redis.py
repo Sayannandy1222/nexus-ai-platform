@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from redis.asyncio import Redis
-from redis.asyncio.connection import ConnectionPool
+from redis.asyncio import ConnectionPool, Redis
 
 from nexus.cache.adapters.protocol import CacheStore
 from nexus.core.config import Settings
@@ -11,14 +10,14 @@ from nexus.core.config import Settings
 
 class RedisCacheAdapter(CacheStore):
     """
-    Redis/Valkey infrastructure adapter.
+    Production Redis/Valkey cache adapter.
 
     Design goals:
     - Async/non-blocking Redis I/O.
     - Connection pooling.
     - Explicit connection and socket timeouts.
     - Atomic rate-limit increment + TTL initialization.
-    - Bounded Redis state.
+    - Bounded Redis state through TTLs.
     - Redis implementation details isolated behind CacheStore.
     """
 
@@ -49,6 +48,16 @@ class RedisCacheAdapter(CacheStore):
         client = Redis(connection_pool=pool)
 
         return cls(client)
+
+    async def ping(self) -> bool:
+        """
+        Verify that Redis/Valkey is reachable.
+
+        Used by the application readiness probe.
+        """
+        result = await self._client.ping()
+
+        return bool(result)
 
     async def get(self, key: str) -> str | None:
         value = await self._client.get(key)

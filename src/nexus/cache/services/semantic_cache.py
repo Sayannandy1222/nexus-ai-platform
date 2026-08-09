@@ -6,6 +6,10 @@ from dataclasses import dataclass
 from nexus.cache.adapters.protocol import CacheStore
 from nexus.cache.keys import hash_text, semantic_cache_key
 from nexus.core.config import Settings
+from nexus.observability.cache_metrics import (
+    SEMANTIC_CACHE_HITS_TOTAL,
+    SEMANTIC_CACHE_MISSES_TOTAL,
+)
 
 
 @dataclass(frozen=True)
@@ -36,6 +40,7 @@ class SemanticCache:
         payload = await self._store.get(key)
 
         if payload is None:
+            SEMANTIC_CACHE_MISSES_TOTAL.inc()
             return None
 
         data = json.loads(payload)
@@ -44,6 +49,8 @@ class SemanticCache:
 
         if not isinstance(response, str):
             raise ValueError("invalid semantic cache payload")
+
+        SEMANTIC_CACHE_HITS_TOTAL.inc()
 
         return CacheEntry(response=response)
 
@@ -68,6 +75,7 @@ class SemanticCache:
 
     async def delete(self, query: str) -> int:
         key = semantic_cache_key(hash_text(self._normalize(query)))
+
         return await self._store.delete(key)
 
     @staticmethod

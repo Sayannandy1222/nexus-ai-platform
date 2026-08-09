@@ -5,27 +5,23 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from nexus.api.middleware import RequestContextMiddleware
 from nexus.api.router import api_router
 from nexus.cache.adapters.redis import RedisCacheAdapter
 from nexus.cache.services.rate_limiter import RateLimiter
 from nexus.core.config import get_settings
+from nexus.core.logging import configure_logging
 
 
 @asynccontextmanager
 async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     """
     Manage application resources across startup and shutdown.
-
-    Startup:
-        - Load application settings.
-        - Create the Redis/Valkey connection pool.
-        - Initialize shared application services.
-
-    Shutdown:
-        - Gracefully close the Redis/Valkey connection pool.
     """
 
     settings = get_settings()
+
+    configure_logging(settings.log_level)
 
     cache_adapter = RedisCacheAdapter.from_settings(settings)
 
@@ -52,6 +48,8 @@ def create_app() -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
     )
+
+    application.add_middleware(RequestContextMiddleware)
 
     application.include_router(api_router)
 
