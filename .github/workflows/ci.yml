@@ -1,0 +1,50 @@
+name: NEXUS CI
+
+on:
+  push:
+    branches:
+      - develop
+      - main
+      - master
+  pull_request:
+    branches:
+      - develop
+      - main
+      - master
+
+jobs:
+  test:
+    name: Test and Validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install project
+        run: pip install .
+
+      - name: Compile Python
+        run: python -m compileall -q src
+
+      - name: Import application
+        env:
+          NEXUS_API_KEY: ci-test-key
+          CACHE_URL: redis://localhost:6379/0
+          LLM_PROVIDER: fake
+          OTEL_ENABLED: "false"
+        run: |
+          python -c "from nexus.main import app; print(app.title)"
+          python -c "from nexus.main import app; print([r.path for r in app.routes if getattr(r, 'path', None)])"
+
+      - name: Validate Docker Compose
+        run: docker compose config -q
