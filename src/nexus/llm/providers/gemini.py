@@ -12,6 +12,7 @@ from nexus.llm.errors import (
     LLMProviderTimeoutError,
     LLMProviderUnavailableError,
 )
+from nexus.llm.http.client import HTTPClientPool
 from nexus.llm.models import LLMRequest, LLMResponse
 
 
@@ -24,12 +25,14 @@ class GeminiLLMProvider:
         self,
         api_key: str,
         model: str = "gemini-2.5-flash",
+        http_client: HTTPClientPool | None = None,
     ) -> None:
         if not api_key.strip():
             raise ValueError("Gemini API key must not be empty")
 
         self._api_key = api_key
         self._model = model
+        self._http_client = http_client
 
     @property
     def name(self) -> str:
@@ -58,19 +61,30 @@ class GeminiLLMProvider:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
+            if self._http_client is not None:
+                if not self._http_client.is_started:
+                    await self._http_client.start()
+
+                response = await self._http_client.client.post(
                     url,
                     params=params,
                     json=payload,
                 )
+
+            else:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.post(
+                        url,
+                        params=params,
+                        json=payload,
+                    )
 
         except httpx.TimeoutException as exc:
             raise LLMProviderTimeoutError(
                 "Gemini request timed out",
             ) from exc
 
-        except httpx.HTTPError as exc:
+        except httpx.RequestError as exc:
             raise LLMProviderUnavailableError(
                 "Gemini HTTP request failed",
             ) from exc

@@ -12,6 +12,7 @@ from nexus.llm.errors import (
     LLMProviderTimeoutError,
     LLMProviderUnavailableError,
 )
+from nexus.llm.http.client import HTTPClientPool
 from nexus.llm.models import LLMRequest, LLMResponse
 
 
@@ -25,6 +26,7 @@ class MistralLLMProvider:
         api_key: str,
         model: str = "mistral-small-latest",
         timeout_seconds: float = 30.0,
+        http_client: HTTPClientPool | None = None,
     ) -> None:
         if not api_key.strip():
             raise ValueError("Mistral API key must not be empty")
@@ -35,6 +37,7 @@ class MistralLLMProvider:
         self._api_key = api_key
         self._model = model
         self._timeout_seconds = timeout_seconds
+        self._http_client = http_client
 
     @property
     def name(self) -> str:
@@ -59,17 +62,28 @@ class MistralLLMProvider:
             "Content-Type": "application/json",
         }
 
-        timeout = httpx.Timeout(self._timeout_seconds)
-
         try:
-            async with httpx.AsyncClient(
-                timeout=timeout,
-            ) as client:
-                response = await client.post(
+            if self._http_client is not None:
+                if not self._http_client.is_started:
+                    await self._http_client.start()
+
+                response = await self._http_client.client.post(
                     self.BASE_URL,
                     headers=headers,
                     json=payload,
                 )
+
+            else:
+                timeout = httpx.Timeout(self._timeout_seconds)
+
+                async with httpx.AsyncClient(
+                    timeout=timeout,
+                ) as client:
+                    response = await client.post(
+                        self.BASE_URL,
+                        headers=headers,
+                        json=payload,
+                    )
 
         except httpx.TimeoutException as exc:
             raise LLMProviderTimeoutError(

@@ -2,13 +2,17 @@ from __future__ import annotations
 
 from nexus.core.config import Settings
 from nexus.llm.errors import LLMProviderError
+from nexus.llm.http.client import HTTPClientPool
 from nexus.llm.protocol import LLMProvider
 from nexus.llm.providers.gemini import GeminiLLMProvider
 from nexus.llm.providers.groq import GroqLLMProvider
 from nexus.llm.providers.mistral import MistralLLMProvider
 
 
-def build_llm_providers(settings: Settings) -> list[LLMProvider]:
+def build_llm_providers(
+    settings: Settings,
+    http_client: HTTPClientPool | None = None,
+) -> list[LLMProvider]:
     """
     Build the configured LLM provider chain.
 
@@ -22,7 +26,8 @@ def build_llm_providers(settings: Settings) -> list[LLMProvider]:
 
         Mistral -> Groq -> Gemini
 
-    The LLM gateway handles retries, timeouts, and fallback.
+    The shared HTTP client is injected into every provider so
+    connections can be reused across requests.
     """
 
     provider_names = [
@@ -47,6 +52,7 @@ def build_llm_providers(settings: Settings) -> list[LLMProvider]:
                 MistralLLMProvider(
                     api_key=settings.mistral_api_key,
                     model=settings.mistral_model,
+                    http_client=http_client,
                 ),
             )
 
@@ -60,6 +66,7 @@ def build_llm_providers(settings: Settings) -> list[LLMProvider]:
                 GroqLLMProvider(
                     api_key=settings.groq_api_key,
                     model=settings.groq_model,
+                    http_client=http_client,
                 ),
             )
 
@@ -73,13 +80,16 @@ def build_llm_providers(settings: Settings) -> list[LLMProvider]:
                 GeminiLLMProvider(
                     api_key=settings.gemini_api_key,
                     model=settings.gemini_model,
+                    http_client=http_client,
                 ),
             )
 
         elif provider_name == "fake":
             from nexus.llm.providers.fake import FakeLLMProvider
 
-            providers.append(FakeLLMProvider())
+            providers.append(
+                FakeLLMProvider(),
+            )
 
         else:
             raise ValueError(

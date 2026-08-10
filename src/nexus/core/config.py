@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -26,8 +28,18 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8000
 
-    # API AUTHENTICATION
-    api_key: str | None = None
+    # API Authentication
+    #
+    # Supports both:
+    #   NEXUS_API_KEY=...       -> .env / environment
+    #   Settings(api_key="...") -> tests / Python code
+    api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "NEXUS_API_KEY",
+            "api_key",
+        ),
+    )
     api_key_header: str = "X-API-Key"
 
     # Database
@@ -67,6 +79,7 @@ class Settings(BaseSettings):
 
     # LLM
     llm_provider: str = "mistral"
+
     mistral_api_key: str | None = None
     mistral_model: str = "mistral-small-latest"
 
@@ -75,6 +88,7 @@ class Settings(BaseSettings):
 
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-2.5-flash"
+
     llm_request_timeout_seconds: float = 30.0
     llm_max_retries: int = 2
     llm_retry_base_delay_seconds: float = 0.5

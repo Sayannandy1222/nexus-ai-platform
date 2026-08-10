@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from prometheus_client import Counter, Histogram
+from prometheus_client import Counter, Gauge, Histogram
 
 LLM_REQUESTS_TOTAL = Counter(
     "nexus_llm_requests_total",
@@ -44,4 +44,52 @@ LLM_FALLBACKS_TOTAL = Counter(
     "nexus_llm_fallbacks_total",
     "Total number of LLM provider fallbacks.",
     labelnames=("from_provider", "to_provider"),
+)
+
+LLM_PROVIDER_REQUESTS = Gauge(
+    "nexus_llm_provider_requests",
+    "Current number of requests observed by the provider router.",
+    labelnames=("provider",),
+)
+
+LLM_PROVIDER_SUCCESS_RATE = Gauge(
+    "nexus_llm_provider_success_rate",
+    "Current observed provider success rate.",
+    labelnames=("provider",),
+)
+
+LLM_PROVIDER_ERROR_RATE = Gauge(
+    "nexus_llm_provider_error_rate",
+    "Current observed provider error rate.",
+    labelnames=("provider",),
+)
+
+LLM_PROVIDER_AVERAGE_LATENCY_SECONDS = Gauge(
+    "nexus_llm_provider_average_latency_seconds",
+    "Current observed average successful provider latency.",
+    labelnames=("provider",),
+)
+
+LLM_PROVIDER_CONSECUTIVE_FAILURES = Gauge(
+    "nexus_llm_provider_consecutive_failures",
+    "Current consecutive failure count for the provider.",
+    labelnames=("provider",),
+)
+
+LLM_PROVIDER_HEALTHY = Gauge(
+    "nexus_llm_provider_healthy",
+    "Whether the provider is currently considered healthy.",
+    labelnames=("provider",),
+)
+
+LLM_PROVIDER_SCORE = Gauge(
+    "nexus_llm_provider_score",
+    "Current routing score assigned to the provider.",
+    labelnames=("provider",),
+)
+
+LLM_PROVIDER_SELECTED_TOTAL = Counter(
+    "nexus_llm_provider_selected_total",
+    "Total number of times a provider was selected as the first routing candidate.",
+    labelnames=("provider",),
 )

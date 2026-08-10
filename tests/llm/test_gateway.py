@@ -358,3 +358,201 @@ async def test_gateway_does_not_fallback_on_generic_provider_error() -> None:
         )
 
     assert secondary.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_gateway_records_successful_latency_in_router() -> None:
+    class NamedProvider:
+        name = "fast"
+
+        async def generate(
+            self,
+            request: LLMRequest,
+        ) -> LLMResponse:
+            await asyncio.sleep(0.001)
+
+            return LLMResponse(
+                content="success",
+                model="fast-model",
+            )
+
+    provider = NamedProvider()
+
+    gateway = LLMGateway(
+        [provider],
+        Settings(
+            llm_max_retries=0,
+        ),
+    )
+
+    await gateway.generate(
+        LLMRequest(prompt="measure latency"),
+    )
+
+    stats = gateway._router.get_stats(provider)
+
+    assert stats.requests == 1
+    assert stats.successes == 1
+    assert stats.failures == 0
+    assert stats.average_latency_seconds > 0
+    assert stats.consecutive_failures == 0
+
+
+@pytest.mark.asyncio
+async def test_gateway_router_explores_all_providers() -> None:
+    class NamedProvider:
+        def __init__(
+            self,
+            provider_name: str,
+        ) -> None:
+            self.name = provider_name
+            self.calls = 0
+
+        async def generate(
+            self,
+            request: LLMRequest,
+        ) -> LLMResponse:
+            self.calls += 1
+
+            return LLMResponse(
+                content=f"response from {self.name}",
+                model=f"{self.name}-model",
+            )
+
+    mistral = NamedProvider("mistral")
+    groq = NamedProvider("groq")
+    gemini = NamedProvider("gemini")
+
+    gateway = LLMGateway(
+        [mistral, groq, gemini],
+        Settings(
+            llm_max_retries=0,
+        ),
+    )
+
+    first = await gateway.generate(
+        LLMRequest(prompt="request 1"),
+    )
+
+    second = await gateway.generate(
+        LLMRequest(prompt="request 2"),
+    )
+
+    third = await gateway.generate(
+        LLMRequest(prompt="request 3"),
+    )
+
+    assert first.model == "mistral-model"
+    assert second.model == "groq-model"
+    assert third.model == "gemini-model"
+
+    assert mistral.calls == 1
+    assert groq.calls == 1
+    assert gemini.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_gateway_router_prefers_faster_provider_after_exploration() -> None:
+    class TimedProvider:
+        def __init__(
+            self,
+            provider_name: str,
+            delay_seconds: float,
+        ) -> None:
+            self.name = provider_name
+            self.delay_seconds = delay_seconds
+            self.calls = 0
+
+        async def generate(
+            self,
+            request: LLMRequest,
+        ) -> LLMResponse:
+            self.calls += 1
+
+            await asyncio.sleep(
+                self.delay_seconds,
+            )
+
+            return LLMResponse(
+                content=f"response from {self.name}",
+                model=f"{self.name}-model",
+            )
+
+    slow = TimedProvider(
+        "mistral",
+        0.02,
+    )
+
+    fast = TimedProvider(
+        "groq",
+        0.001,
+    )
+
+    gateway = LLMGateway(
+        [slow, fast],
+        Settings(
+            llm_max_retries=0,
+        ),
+    )
+
+    # Exploration phase.
+    first = await gateway.generate(
+        LLMRequest(prompt="explore slow"),
+    )
+
+    second = await gateway.generate(
+        LLMRequest(prompt="explore fast"),
+    )
+
+    assert first.model == "mistral-model"
+    assert second.model == "groq-model"
+
+    # Optimization phase.
+    optimized = await gateway.generate(
+        LLMRequest(prompt="choose best"),
+    )
+
+    assert optimized.model == "groq-model"
+
+    assert slow.calls == 1
+    assert fast.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_gateway_failure_updates_router_health() -> None:
+    class FailingProvider:
+        name = "mistral"
+
+        async def generate(
+            self,
+            request: LLMRequest,
+        ) -> LLMResponse:
+            raise LLMProviderUnavailableError(
+                "provider unavailable",
+            )
+
+    provider = FailingProvider()
+
+    gateway = LLMGateway(
+        [provider],
+        Settings(
+            llm_max_retries=0,
+        ),
+    )
+
+    for _ in range(3):
+        with pytest.raises(
+            LLMProviderUnavailableError,
+            match="provider unavailable",
+        ):
+            await gateway.generate(
+                LLMRequest(prompt="failure"),
+            )
+
+    stats = gateway._router.get_stats(provider)
+
+    assert stats.requests == 3
+    assert stats.successes == 0
+    assert stats.failures == 3
+    assert stats.consecutive_failures == 3
+    assert not stats.is_healthy
