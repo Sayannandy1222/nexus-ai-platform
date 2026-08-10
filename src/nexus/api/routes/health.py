@@ -11,8 +11,7 @@ async def health() -> dict[str, str]:
     """
     Liveness probe.
 
-    This only verifies that the FastAPI process is running.
-    It intentionally does not depend on external services.
+    Only verifies that the FastAPI process is running.
     """
     return {"status": "ok"}
 
@@ -22,27 +21,50 @@ async def readiness(request: Request) -> JSONResponse:
     """
     Readiness probe.
 
-    The instance is ready only when its shared Valkey connection
-    can successfully respond to a health check.
+    The instance is ready when the configured Valkey/Redis
+    cache adapter exists and successfully responds to ping().
     """
 
     cache = getattr(request.app.state, "cache_adapter", None)
 
+    if cache is None:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "status": "not_ready",
+                "reason": "cache_adapter_missing",
+            },
+        )
+
     if not isinstance(cache, RedisCacheAdapter):
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            content={"status": "not_ready"},
+            content={
+                "status": "not_ready",
+                "reason": "invalid_cache_adapter",
+                "cache_type": type(cache).__name__,
+            },
         )
 
     try:
-        await cache.ping()
-    except Exception:
+        result = await cache.ping()
+
         return JSONResponse(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            content={"status": "not_ready"},
+            status_code=status.HTTP_200_OK,
+            content={
+                "status": "ready",
+                "cache": "ok",
+                "ping": str(result),
+            },
         )
 
-    return JSONResponse(
-        status_code=status.HTTP_200_OK,
-        content={"status": "ready"},
-    )
+    except Exception as exc:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "status": "not_ready",
+                "reason": "cache_ping_failed",
+                "error": type(exc).__name__,
+                "message": str(exc),
+            },
+        )

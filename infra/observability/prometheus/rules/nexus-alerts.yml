@@ -1,0 +1,97 @@
+groups:
+  - name: nexus-http-alerts
+    interval: 15s
+    rules:
+      - alert: NexusHighHTTPErrorRate
+        expr: |
+          (
+            sum(rate(nexus_http_requests_total{status_code=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(nexus_http_requests_total[5m])), 1)
+          ) > 0.05
+        for: 5m
+        labels:
+          service: nexus-api
+          severity: critical
+        annotations:
+          summary: "NEXUS HTTP 5xx error rate is high"
+          description: "More than 5% of HTTP requests are returning 5xx responses for 5 minutes."
+
+      - alert: NexusHighHTTP4xxRate
+        expr: |
+          (
+            sum(rate(nexus_http_requests_total{status_code=~"4.."}[5m]))
+            /
+            clamp_min(sum(rate(nexus_http_requests_total[5m])), 1)
+          ) > 0.20
+        for: 10m
+        labels:
+          service: nexus-api
+          severity: warning
+        annotations:
+          summary: "NEXUS HTTP 4xx rate is high"
+          description: "More than 20% of HTTP requests are returning 4xx responses for 10 minutes."
+
+
+  - name: nexus-infrastructure-alerts
+    interval: 15s
+    rules:
+      - alert: NexusAPIInstanceDown
+        expr: up{job=~"nexus-api-.*"} == 0
+        for: 2m
+        labels:
+          service: nexus-api
+          severity: critical
+        annotations:
+          summary: "NEXUS API instance is down"
+          description: "A NEXUS API Prometheus target has been unreachable for more than 2 minutes."
+
+      - alert: NexusPrometheusTargetDown
+        expr: up == 0
+        for: 2m
+        labels:
+          service: monitoring
+          severity: critical
+        annotations:
+          summary: "NEXUS monitoring target is down"
+          description: "A Prometheus scrape target has been unavailable for more than 2 minutes."
+
+
+  - name: nexus-llm-alerts
+    interval: 15s
+    rules:
+      - alert: NexusLLMHighErrorRate
+        expr: |
+          (
+            sum(rate(nexus_llm_errors_total[5m]))
+            /
+            clamp_min(sum(rate(nexus_llm_requests_total[5m])), 1)
+          ) > 0.05
+        for: 5m
+        labels:
+          service: nexus-llm
+          severity: critical
+        annotations:
+          summary: "NEXUS LLM error rate is high"
+          description: "More than 5% of LLM requests are failing for 5 minutes."
+
+      - alert: NexusLLMHighLatency
+        expr: |
+          (
+            rate(nexus_llm_request_duration_seconds_sum[5m])
+            /
+            clamp_min(rate(nexus_llm_request_duration_seconds_count[5m]), 0.001)
+          ) > 10
+        for: 5m
+        labels:
+          service: nexus-llm
+          severity: warning
+        annotations:
+          summary: "NEXUS LLM latency is high"
+          description: "Average LLM request latency has exceeded 10 seconds for 5 minutes."
+
+      - alert: NexusLLMProviderUnhealthy
+        expr: nexus_llm_provider_healthy < 1
+        for: 2m
+        labels:
+          service: nexus-llm
