@@ -94,7 +94,7 @@ sequenceDiagram
     N->>A: Reverse-proxy and load-balance request
     A->>G: API key + request validation + size protection
     G->>R: Authorized request
-    R->>V: Apply rate policy; check cache
+    R->>V: Apply rate policy and check cache
     alt Cache hit
         V-->>A: Cached response
     else Cache miss
